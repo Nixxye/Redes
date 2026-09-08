@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# arquivos de teste sao gerados por gerar_arquivo.py, nao versionados
+arquivos/*
+!arquivos/.gitkeep
+downloads/*
+!downloads/.gitkeep
+
+.vscode/
+.idea/
