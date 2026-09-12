@@ -3,8 +3,9 @@
 Documento de apoio ao Trabalho 1. Cobre a API de sockets UDP do Python e as
 armadilhas que costumam derrubar implementações de transferência confiável sobre UDP.
 
-As decisões de projeto (tamanho de segmento, formato do cabeçalho, janela) estão no
-[PLANO.md](../PLANO.md). Aqui é só o "como fazer" da parte de rede.
+As decisões de projeto (tamanho de segmento, formato do cabeçalho, janela) e o passo a
+passo do fluxo de execução estão no [README.md](../README.md). Aqui é só o "como fazer"
+da parte de rede.
 
 > **Sobre a restrição do enunciado.** O módulo `socket` do Python **não** é uma
 > biblioteca de alto nível: é um envelope fino sobre a mesma API BSD do C, com os

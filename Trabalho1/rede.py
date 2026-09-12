@@ -17,9 +17,13 @@ A mesma classe serve os tres usos do projeto:
 Ver docs/REDES.md secoes 2, 3, 5, 6 e 9.
 """
 
+import logging
 import socket
+import time
 
 import protocolo as proto
+
+log = logging.getLogger("rede")
 
 # 4 MB. Sem isso, uma rajada de 12 MB em loopback perde centenas de datagramas
 # por estouro do buffer do kernel, sem rede nenhuma envolvida (REDES.md secao 9).
@@ -39,39 +43,36 @@ class SocketUDP:
         porta            0 = efemera (o kernel escolhe; leia depois em .porta)
         timeout          segundos; None = bloqueia para sempre
         buffer_recepcao  bytes de SO_RCVBUF; use BUFFER_RECEPCAO_PADRAO no cliente
-
-        TODO:
-          - self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-          - se buffer_recepcao: setsockopt(SOL_SOCKET, SO_RCVBUF, buffer_recepcao)
-            (definir ANTES do bind; o kernel pode conceder menos — confira com
-             getsockopt e logue o valor real)
-          - self.sock.bind(("0.0.0.0", porta))
-            "0.0.0.0" e nao "127.0.0.1": senao o cliente de outra maquina nao chega
-          - se timeout is not None: self.sock.settimeout(timeout)
         """
-        raise NotImplementedError
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        if buffer_recepcao:
+            # Definir ANTES do bind. O kernel pode conceder menos que o pedido
+            # (no Linux ele ainda dobra o valor internamente): confira e logue.
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, buffer_recepcao)
+            real = self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+            log.debug("SO_RCVBUF pedido %d, concedido %d", buffer_recepcao, real)
+
+        # "0.0.0.0" e nao "127.0.0.1": senao o cliente de outra maquina nao chega.
+        self.sock.bind(("0.0.0.0", porta))
+
+        if timeout is not None:
+            self.sock.settimeout(timeout)
 
     # ------------------------------------------------------------- endereco
 
     @property
     def porta(self) -> int:
-        """Porta local. Necessario quando se liga na porta 0 e se quer saber qual saiu.
-
-        TODO: return self.sock.getsockname()[1]
-        """
-        raise NotImplementedError
+        """Porta local. Necessario quando se liga na porta 0 e se quer saber qual saiu."""
+        return self.sock.getsockname()[1]
 
     def conectar(self, destino):
         """connect() em UDP nao conversa com ninguem: so fixa o destino padrao,
         filtra datagramas de outras origens e habilita a entrega de erros ICMP
         neste socket — e assim que se detecta "servidor nao esta no ar" com
         ConnectionRefusedError em vez de so timeout (REDES.md secao 8).
-
-        Opcional. Use apenas se for demonstrar essa deteccao.
-
-        TODO: self.sock.connect(destino)
         """
-        raise NotImplementedError
+        self.sock.connect(destino)
 
     # ------------------------------------------------------------- envio
 
@@ -80,12 +81,9 @@ class SocketUDP:
 
         Em UDP o envio e tudo ou nada: nao existe envio parcial como em TCP,
         entao nao precisa de laco de reenvio aqui.
-
-        TODO:
-          dados = proto.empacotar(tipo, sessao, seq, payload, flags)
-          return self.sock.sendto(dados, destino)
         """
-        raise NotImplementedError
+        dados = proto.empacotar(tipo, sessao, seq, payload, flags)
+        return self.sock.sendto(dados, destino)
 
     # ------------------------------------------------------------- recepcao
 
@@ -101,17 +99,20 @@ class SocketUDP:
 
         NAO captura TimeoutError: deixe subir. Timeout nao e erro, e o sinal para
         varrer o bitmap e mandar NACK — quem trata e o laco de quem chamou.
-
-        TODO:
-          dados, origem = self.sock.recvfrom(proto.TAM_BUFFER)
-          se origem_esperada is not None e origem != origem_esperada: return None
-              (a tupla (ip, porta) compara os dois campos de uma vez; sem isso,
-               qualquer processo da maquina injeta datagramas na sua transferencia)
-          try:  cab, payload = proto.desempacotar(dados)
-          except proto.PacoteInvalido: return None
-          return cab, payload, origem
         """
-        raise NotImplementedError
+        dados, origem = self.sock.recvfrom(proto.TAM_BUFFER)
+
+        # A tupla (ip, porta) compara os dois campos de uma vez. Sem isso, qualquer
+        # processo da maquina injeta datagramas na sua transferencia.
+        if origem_esperada is not None and origem != origem_esperada:
+            return None
+
+        try:
+            cab, payload = proto.desempacotar(dados)
+        except proto.PacoteInvalido:
+            return None
+
+        return cab, payload, origem
 
     def esperar(self, tipos, origem_esperada=None):
         """Recebe ate chegar um datagrama de um dos `tipos` aceitos.
@@ -120,21 +121,29 @@ class SocketUDP:
         esperando META ou ERR; o servidor esperando ACK, NACK ou FIN_ACK).
         Datagramas descartaveis e de tipo inesperado sao ignorados.
 
-        -> (cabecalho, payload, origem). Deixa TimeoutError subir.
-
-        TODO: laco chamando self.receber() ate cab.tipo estar em `tipos`.
+        -> (cabecalho, payload, origem). Levanta TimeoutError se o timeout do
+        socket esgotar sem nenhuma resposta valida — inclusive quando so chega
+        lixo (usa um prazo proprio para nao ficar preso num fluxo de junk).
         """
-        raise NotImplementedError
+        if isinstance(tipos, proto.Tipo):
+            tipos = (tipos,)
+
+        limite = self.sock.gettimeout()
+        fim = time.monotonic() + limite if limite else None
+
+        while True:
+            r = self.receber(origem_esperada)     # pode levantar TimeoutError
+            if r is not None and r[0].tipo in tipos:
+                return r
+            if fim is not None and time.monotonic() >= fim:
+                raise TimeoutError()
 
     # ------------------------------------------------------------- ciclo de vida
 
     def fechar(self):
         """Fecha o socket. Em UDP nao ha handshake de encerramento: sem FIN, sem
-        TIME_WAIT, a porta e liberada na hora.
-
-        TODO: self.sock.close()
-        """
-        raise NotImplementedError
+        TIME_WAIT, a porta e liberada na hora."""
+        self.sock.close()
 
     def __enter__(self):
         return self
@@ -150,19 +159,22 @@ def enviar_com_retentativa(sock, tipo, destino, tipos_esperados, *,
     """Envia e reenvia ate obter resposta de um dos `tipos_esperados`.
 
     Usado nos dois lados, porque a mensagem de controle tambem se perde:
-      - cliente: REQ_GET esperando META ou ERR; NACK esperando DATA
+      - cliente: REQ_GET esperando META ou ERR
       - servidor: FIN esperando FIN_ACK
 
-    Sem isto, um NACK perdido trava os dois lados esperando para sempre.
+    Sem isto, uma mensagem de controle perdida trava os dois lados esperando.
 
     -> (cabecalho, payload, origem), ou None se esgotar as tentativas
        (e o caso "servidor fora do ar" e "servidor morto no meio da transferencia")
-
-    TODO:
-      para cada tentativa em 1..tentativas:
-          sock.enviar(tipo, destino, sessao=..., seq=..., payload=..., flags=...)
-          try:    return sock.esperar(tipos_esperados, origem_esperada=None)
-          except TimeoutError: logar a tentativa e continuar
-      return None
     """
-    raise NotImplementedError
+    for tentativa in range(1, tentativas + 1):
+        sock.enviar(tipo, destino, sessao=sessao, seq=seq, payload=payload, flags=flags)
+        try:
+            return sock.esperar(tipos_esperados, origem_esperada=None)
+        except TimeoutError:
+            log.debug("sem resposta a %s (tentativa %d/%d)", tipo.name, tentativa, tentativas)
+        except ConnectionResetError:
+            # ICMP Port Unreachable: no Windows chega mesmo sem connect(); significa
+            # que nao ha ninguem escutando naquela porta (REDES.md secao 8).
+            log.debug("conexao recusada por %s (ICMP port unreachable)", destino)
+    return None

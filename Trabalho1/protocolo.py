@@ -24,7 +24,7 @@ FORMATO_CABECALHO = "!HBBIIHIH"
 TAM_CABECALHO = struct.calcsize(FORMATO_CABECALHO)   # 20
 
 # 1024 + 20 = 1044 bytes por datagrama, folgado abaixo dos 1472 B que cabem numa
-# MTU de 1500 sem fragmentacao IP. Ver PLANO.md secao 1.1.
+# MTU de 1500 sem fragmentacao IP. Ver docs/REDES.md secao 10.
 TAM_PAYLOAD = 1024
 TAM_DATAGRAMA = TAM_CABECALHO + TAM_PAYLOAD          # 1044
 TAM_BUFFER = 2048         # folga no recvfrom: o excedente seria descartado calado
